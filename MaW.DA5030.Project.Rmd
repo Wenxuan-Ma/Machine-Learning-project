@@ -1,0 +1,526 @@
+---
+title: "Signature Project"
+author: "Wenxuan Ma"
+date: "4/14/2021"
+output: html_document
+---
+
+The dataset is from the Kaggle and collect all Pokemons features like their name, type, HP, Attack Defense and so on. Based on the Pokemon features, we can determine the rarity (Legendary or not) of the pokemon. 
+In this project, I will use the Pokemon dataset to analyze and determine the relationship between the Legendary column and other features. 
+And also assuming that a new Pokemon is in preparation, according to its features, we need to define whether it can be used as a ledger.
+Reference: https://storage.googleapis.com/kaggle-forum-message-attachments/203647/6843/Pokemon.csv
+```{r}
+# Load the required packages
+library(psych) # Use the pairs.panels() function to plot the dataset.
+library(dplyr) # Use to load the %>% step to be more efficient
+library(tidyr) # Use the separate function to separate the observations.
+library(caret) # Use the confusionMatrix in this package to commpare the prediction and calculate the accuracy.
+# Also, the train() function in the caret will be used for bagging model.
+library(C50) # Use the C5.0 to train the decision tree model.
+library(gmodels) # Use the CrossTable to compare the predict result.
+library(e1071) # Use the navieBayes to build the Navie Bayes model.
+library(ipred) # Use the bagging() function to bag the dataset.
+```
+
+Data Acquisition
+```{r}
+pokemon <- read.csv("https://storage.googleapis.com/kaggle-forum-message-attachments/203647/6843/Pokemon.csv")
+
+dim(pokemon)
+# There are 800 observations and 16 featers.
+```
+
+Data Exploration
+```{r}
+# Understanding the dataset
+# Have a overall understand of the data set columns
+str(pokemon)
+# The column Legendary is the target value we need to predict.It has two levels, which are True and False, which means the Pokemon is Legendary or not. 
+# Because the target value is categotical, so in this project, I may use logistic regression, decision tree and naive bayes. 
+
+summary(pokemon)
+
+# Then I will combine the type 1 and type 2 to Type column to determine how many types in total. 
+pokemon$Type <- paste(pokemon$Type1,pokemon$Type2,sep = ' ')
+pokemon <- subset(pokemon, select = -c(Type1, Type2))
+
+# The column X., Name, Other and Type are useless in this project, also, the Other column is not reletive withthe pridect value,so I will remove them.
+pokemon <- subset(pokemon, select = -c(X., Name, Other,Type))
+# Have a look at the data set first 6 rows.
+head(pokemon)
+```
+
+```{r}
+# exploratory data plots
+# I will use pairs.panel to see the relationship between each features. 
+pairs.panels(pokemon[c("Total","HP","Attack","Defense","Sp..Atk","Sp..Def","Speed")])
+# from the pairs.panels, we can see that the relationship between features looks like a normal distribution. 
+```
+```{r}
+# correlation/collinearity/chi-squared analysis
+# Build the pairwise correlation.
+cor(pokemon[c("Total","HP","Attack","Defense","Sp..Atk","Sp..Def","Speed")])
+```
+
+```{r}
+# detection of outliers for continuous features
+# I will find the outliers and change them to NA if they are less than 5% of data in the dataset, which is equals to 40.
+# Reference from https://www.r-bloggers.com/2020/01/how-to-remove-outliers-in-r/#:~:text=1%20Looking%20at%20Outliers%20in%20R.%20As%20I,analytics%20using%20mathematical%20models%20and%20data%20processing%20software.
+
+# first, I will use quantile() to find the 25th and 75 th percentile.
+Q.total <- quantile(pokemon$Total, probs=c(.25, .75), na.rm = FALSE)
+# and then I will use the IQR() function to determine the difference between the 25th and the 75th percentile.
+iqr.total <- IQR(pokemon$Total)
+# Now, I will find the range of the outliers values
+up.total <- Q.total[2]+1.5*iqr.total
+low.total <- Q.total[1]-1.5*iqr.total
+# now we know that the range of the outliers are the value smaller than 52.5 or greater than 792.5.
+# We build a dataset for the outliers and we can see there is no outliers in the Total column. 
+out.total <- subset(pokemon,pokemon$Total < low.total | pokemon$Total > up.total)
+
+# We use the same process for the other numeric columns.
+# This is for the HP column.
+Q.hp <- quantile(pokemon$HP, probs=c(.25, .75), na.rm = FALSE)
+iqr.hp <- IQR(pokemon$HP)
+up.hp <- Q.hp[2]+1.5*iqr.hp
+low.hp <- Q.hp[1]-1.5*iqr.hp
+out.hp <- subset(pokemon,pokemon$HP < low.hp | pokemon$HP > up.hp)
+# Now we can see there are 19 outliers in the HP column and I will change them to NA because 19 is smaller than 5% of total rows.
+pokemon$HP[pokemon$HP < low.hp | pokemon$HP > up.hp] <- NA
+
+# Then, I will find the outliers for the Attack use the same method.
+Q.attack <- quantile(pokemon$Attack, probs=c(.25, .75), na.rm = FALSE)
+iqr.attack <- IQR(pokemon$Attack)
+up.attack <- Q.attack[2]+1.5*iqr.attack
+low.attack <- Q.attack[1]-1.5*iqr.attack
+out.attack <- subset(pokemon,pokemon$Attack < low.attack | pokemon$Attack > up.attack)
+# There are 7 outliers in the Attack column and because it is smaller than 5%, I will change them.
+pokemon$Attack[pokemon$Attack < low.attack | pokemon$Attack > up.attack] <- NA
+
+# I will find the outliers for the Defense column.
+Q.def <- quantile(pokemon$Defense, probs=c(.25, .75), na.rm = FALSE)
+iqr.def <- IQR(pokemon$Defense)
+up.def <- Q.def[2]+1.5*iqr.def
+low.def <- Q.def[1]-1.5*iqr.def
+out.def <- subset(pokemon,pokemon$Defense < low.def | pokemon$Defense > up.def)
+# There are 12 outliers in the Defense column and I will change them because 12 is smaller than 5%.
+pokemon$Defense[pokemon$Defense < low.def | pokemon$Defense > up.def] <- NA
+
+# Find the outliers for the Sp..Atk column.
+Q.sa <- quantile(pokemon$Sp..Atk, probs=c(.25, .75), na.rm = FALSE)
+iqr.sa <- IQR(pokemon$Sp..Atk)
+up.sa <- Q.sa[2]+1.5*iqr.sa
+low.sa <- Q.sa[1]-1.5*iqr.sa
+out.sa <- subset(pokemon,pokemon$Sp..Atk < low.sa | pokemon$Sp..Atk > up.sa)
+# There are 8 outliers in the Sp..Atk column and I will change them because 8 is smaller than 5%.
+pokemon$Sp..Atk[pokemon$Sp..Atk < low.sa | pokemon$Sp..Atk > up.sa] <- NA
+
+# Find the outliers for the Sp..Def column.
+Q.sd <- quantile(pokemon$Sp..Def, probs=c(.25, .75), na.rm = FALSE)
+iqr.sd <- IQR(pokemon$Sp..Def)
+up.sd <- Q.sd[2]+1.5*iqr.sd
+low.sd <- Q.sd[1]-1.5*iqr.sd
+out.sd <- subset(pokemon,pokemon$Sp..Def < low.sd | pokemon$Sp..Def > up.sd)
+# There are 13 outliers in the Sp..Def column and I will change them because 13 is smaller than 5%.
+pokemon$Sp..Def[pokemon$Sp..Def < low.sd | pokemon$Sp..Def > up.sd] <- NA
+
+# Find the outliers for the Speed column.
+Q.speed <- quantile(pokemon$Speed, probs=c(.25, .75), na.rm = FALSE)
+iqr.speed <- IQR(pokemon$Speed)
+up.speed <- Q.speed[2]+1.5*iqr.speed
+low.speed <- Q.speed[1]-1.5*iqr.speed
+out.speed <- subset(pokemon,pokemon$Speed < low.speed | pokemon$Speed > up.speed)
+# There are 2 outliers in the Speed column and I will change them because 2 is smaller than 5%.
+pokemon$Speed[pokemon$Speed < low.speed | pokemon$Speed > up.speed] <- NA
+```
+
+```{r}
+# evaluation of distribution
+# I will use the histogram to evaluate the distribution because rather than other distribution method,the histogram is the easiest way to understand the data.
+hist(pokemon$Total)
+# The distribution of the Total is not normal distribution, it is left skewed because the peak of the data is around 500.
+
+hist(pokemon$HP)
+# The distribution of the HP is normal distribution because the peak is in the middle around 70.
+
+hist(pokemon$Attack)
+# The distribution of the Attack is not normal distribution,it is right skewed because the peak is around 70.
+
+hist(pokemon$Defense)
+# The distribution of the Defense is not normal distribution.Because the peak is around 70, so it is a right skewed.
+
+hist(pokemon$Sp..Atk)
+# The distribution of the Sp.Atk is not normal distribution.It is a right skewed.
+
+hist(pokemon$Sp..Def)
+# The distribution of the Sp..Def is not normal distribution.It is a right skewed.
+
+hist(pokemon$Speed)
+# The distribution of the Speed is not normal distribution.It is a right skewed.
+
+```
+
+Data Cleaning & Shaping
+```{r}
+# identification of missing values
+any(is.na(pokemon))
+# There is no NA values in the original dataset, but because I have change the outliers into NA, so I will imputing the NA values with the mean values.
+# Then I will have a look of the columns have NA values to inputing them in nex step.
+
+colSums(is.na(pokemon))
+# We can see that the HP, Attack, Defense, Sp..Atk, Sp..Def and Speed colums have NA values. So, I will replace the NA values with the mean of the cokumns.
+```
+```{r}
+# data imputation of missing data
+# Replace the NA values in HP column.
+pokemon$HP[is.na(pokemon$HP)] <- mean(pokemon$HP, na.rm = TRUE)
+
+# Replace the NA values in Attack column.
+pokemon$Attack[is.na(pokemon$Attack)] <- mean(pokemon$Attack, na.rm = TRUE)
+
+# Replace the NA values in Defense column.
+pokemon$Defense[is.na(pokemon$Defense)] <- mean(pokemon$Defense, na.rm = TRUE)
+
+# Replace the NA values in Sp..Atk column.
+pokemon$Sp..Atk[is.na(pokemon$Sp..Atk)] <- mean(pokemon$Sp..Atk, na.rm = TRUE)
+
+# Replace the NA values in Sp..Def column.
+pokemon$Sp..Def[is.na(pokemon$Sp..Def)] <- mean(pokemon$Sp..Def, na.rm = TRUE)
+
+# Replace the NA values in Speed column.
+pokemon$Speed[is.na(pokemon$Speed)] <- mean(pokemon$Speed, na.rm = TRUE)
+
+# Check the status of the NA values again.
+colSums(is.na(pokemon))
+# All of the NA values have been replaced.
+```
+
+```{r}
+# normalization/standardization of feature values
+# I will use the min-max to normalize the dataset
+# first, I will built a normalize function.
+normalize <- function(x){
+  return((x-min(x))/(max(x)-min(x)))
+}
+# then,I will use this function into the feature values in the dataset
+pokemon_n <- as.data.frame(lapply(pokemon[1:7], normalize))
+```
+
+
+```{r}
+# dummy codes if required for algorithm
+pokemon_binary <- pokemon
+
+# I will dummy the Legendary column to Yes means Legendary and No means not legendary.
+pokemon_binary$Legendary <- ifelse(pokemon_binary$Legendary == "False","No","Yes")
+
+# I will dummy the Strong.Against to a two levels column. Which are the data is "None" means no Strong.Against, and yes means have Strong.Against. 
+pokemon_binary$Strong.Against <- ifelse(pokemon_binary$Strong.Against == "None","No","Yes")
+
+# For the column Weak.Against, I will split each against type into multiple columns.
+weak <- pokemon_binary %>%
+  separate(Weak.Against, c("A","B","C","D"))
+# We know that the more Weak.Against means the weaker the pokemon is. So, for the Pokemon with less than or equal to 3 Weak.Against, We call it "No" because it is not very weak. And for the Pokemon with greater than 3 Weak.Against, I will call it "Yes". 
+pokemon_binary$Weak.Against <- ifelse(is.na(weak$D),"No","Yes")
+
+summary(pokemon_binary)
+```
+
+
+```{r}
+# transformation of features to adjust distribution
+# Change the Legendary column to factor. 
+pokemon$Legendary <- as.factor(pokemon$Legendary)
+pokemon_binary$Legendary <- as.factor(pokemon_binary$Legendary)
+
+# Change the Strong.Against column to factor.
+pokemon$Strong.Against <- as.factor(pokemon$Strong.Against)
+pokemon_binary$Strong.Against <- as.factor(pokemon_binary$Strong.Against)
+
+# Change the Weak.Against column to factor.
+pokemon$Weak.Against <- as.factor(pokemon$Weak.Against)
+pokemon_binary$Weak.Against <- as.factor(pokemon_binary$Weak.Against)
+
+# Change the HP to numeric
+pokemon$HP <- as.numeric(pokemon$HP)
+```
+
+
+```{r}
+# identification of principal components (PCA)
+# References from : https://www.statology.org/principal-components-analysis-in-r/
+# first we need to calculate the principal components.
+# Because the PCA only contains numeric, so we need to remove the categorical values.
+pca <- pokemon[1:7]
+pca <- prcomp(pca, scale = T)
+
+# Now display the principal components
+pca$rotation
+
+# I will virtrilize the PCA
+biplot(pca, scale = 0)
+
+# Then, calculate the total variance explanied by principal components.
+pca$sdev ^ 2 / sum(pca$sdev ^ 2)
+# So, we can see there are 7 principal components.
+# The first principal component explains 55.2% of the total variance.
+# The second principal component explains 14.5% of the total variance.
+# The third principal component explains 11.3% of the total variance.
+# The fouth principal component explains 8.2% of the total variance.
+# The fifth principal component explains 6% of the total variance.
+# The sixth principal component explains 4.2% of the total variance.
+# The seventh principal component explains 0.7% of the total variance.
+```
+
+
+Model Construction and Model Evaluation
+
+```{r}
+# creation of training & validation subsets
+# I will use the 70% data for training and 30% data for validation.
+# Set seed first to make the sample fixed.
+set.seed(123)
+# Create the sample data first to represent the rows we pick fot training.
+sample <- sample(1:nrow(pokemon), 0.70 * nrow(pokemon),replace = FALSE)
+train <- pokemon[sample,]
+val <- pokemon[-sample,]
+
+sample_bi <- sample(1:nrow(pokemon_binary), 0.70 * nrow(pokemon_binary),replace = FALSE)
+train_bi <- pokemon_binary[sample,]
+val_bi <- pokemon_binary[-sample,]
+
+```
+
+
+```{r}
+# creation of model A with proper data encoding
+
+# I will do a logistic regression for the model A
+lg <- glm(Legendary ~ ., data = train_bi, family = "binomial")
+# Use the summary() to have a look over the model
+summary(lg)
+
+# By using the model, predict the validation dataset.
+pred_lg <- round(predict(lg, val_bi, type = "response"))
+
+# dummy the Legendary column in the Validation to make it same as the prediction
+levels(val_bi$Legendary) <- c(0,1)
+val_bi$Legendary <- as.numeric(levels(val_bi$Legendary))[val_bi$Legendary]
+
+# Transform the Legendary as factor.
+val_bi$Legendary <- as.factor(val_bi$Legendary)
+
+# build a Matrix to evaluate the predict value with the validation data set.
+lg_matrix <- confusionMatrix(table(pred_lg,val_bi$Legendary))
+lg_accuracy <- lg_matrix$overall[1]
+lg_accuracy
+# So,we can the the model's accuracy is very high now, it is 92.5%.
+
+# The RMSE of the model is 
+rmse_lg <- sqrt(mean(residuals(lg)^2))
+rmse_lg
+
+# Let's do some improve to find out the main important features.
+# I will use the setpwise method and find the feature use the both backward and forward method. 
+lg2 <- step(lg, direction = "both")
+summary(lg2)
+
+# So, we can see that the Total, HP, Attack, Generation, Strong.Against and Weak.Against are important features in this model. 
+# Let's make prediction by useing the improved model.
+pred_lg2 <- round(predict(lg2, val_bi, type = "response"))
+
+# build a table to compare the predict value with the validation dataset.
+lg_matrix2 <- confusionMatrix(table(pred_lg2,val_bi$Legendary))
+lg_matrix2$overall[1]
+# The RMSE of the model is 
+rmse_lg2 <- sqrt(mean(residuals(lg2)^2))
+rmse_lg2
+# From the accuracy we can see that the accuracy is 92.08% after improve decreased, so we can determine that although the features were removed before are not very important but it also can help us do the prediction. 
+```
+
+
+```{r}
+# creation of model B with proper data encoding
+# I will choose decision tree as my model B.
+# For the decision tree, I will use the Pokemon dataset first.
+# I use the C50 package to train model.
+set.seed(100)
+# We build a new dataset that move the Legendary Column in the train_bi dataset.
+train_dt <- train_bi
+train_dt$Legendary <- NULL
+
+# Now we can build the model use the train_dt dataset and the lable which is Legendary column in train_bi dataset.
+dt <- C5.0(train_dt, train_bi$Legendary)
+
+# see the tree's decisions
+summary(dt)
+
+# From the decision tree, we can see that the model correctly classified all data. Now, let's evaluate the model.
+# Before we predict, we need to covert the Legendary from numeric to factor.
+val_bi$Legendary <- ifelse((val_bi$Legendary == 1),"Yes","No" )
+val_bi$Legendary <- as.factor(val_bi$Legendary)
+
+# Now we can do the predict. 
+# We need to do the same thing as we did before for the train dataser. We need to build a new Validation dataset that remove the Legendary Column.
+val_dt <- val_bi
+val_dt$Legendary <- NULL
+pred_dt <- predict(dt,val_dt)
+
+# We use the confusionMatrix to see the overall result of the prediction. We can see that the prediction is 96.25% accuracy. 
+dt_matrix <- confusionMatrix(table(pred_dt, val_bi$Legendary))
+dt_accuracy <- dt_matrix$overall[1]
+dt_accuracy
+# Actually, the accuracy of the model is already equals 96.25%, but we still need to evaluate and improve it to make it better. 
+# add the trails to make the model performance better.
+dt_boost <- C5.0(train_dt, train_bi$Legendary,trials = 5)
+
+# see the tree's decisions
+summary(dt_boost)
+
+# Predict based on the improved model
+pred_dt_boost <- predict(dt_boost,val_dt)
+# The overall result of the prediction. We can see the accuracy of the model is 96.25% accuracy.
+dt_matrix2 <- confusionMatrix(table(pred_dt_boost, val_bi$Legendary))
+dt_matrix2$overall[1]
+
+```
+
+
+```{r}
+# creation of model C with proper data encoding
+# I will choose naive bayes as my model C.
+# I will use the naiveBayes function in the e1071 package.
+nb <- naiveBayes(train_bi,train_bi$Legendary)
+
+# evaluating model performance
+# make the predictions
+pred_nb <- predict(nb, val_bi)
+
+# Compare the prediction withthe true values.
+nb_matrix <- confusionMatrix(pred_nb, val_bi$Legendary)
+nb_accuracy <- nb_matrix$overall[1]
+nb_accuracy
+# From the confusionMatrix, we can see that the accuracy of the modle is 99.17% and there are only 2 data are predicted wrong. 
+
+# improving model performance
+nb2 <- naiveBayes(train_bi, train_bi$Legendary, laplace = 1)
+pred_nb2 <- predict(nb2, val_bi)
+nb_matrix2 <- confusionMatrix(pred_nb2, val_bi$Legendary)
+nb_matrix2$overall[1]
+# From the Matrix,we can see that the accuracy of the model decreased after the improve, so we can see that the orginal model is fit to the dataset enough and do not need other improvement.
+
+```
+
+
+```{r}
+# appropriateness of chosen models for given data
+# If there is a new Pokemon will publish and before it is published, we need to determine if it is Legendary or not. 
+# Assume that the new Pokemon's Total is 675, HP is 93, Attack is 125, Defense is 70, Sp..Atk is 100, Sp..Def is 60, Speed is 90 and it is in 5 Generation. It has Strong Against and has only one weak against. 
+# From the given data, we can see that the new data is looks like:
+new <- data.frame(Total = 675, 
+                  HP = 93,
+                  Attack = 125,
+                  Defense = 70,
+                  Sp..Atk = 100,
+                  Sp..Def = 60,
+                  Speed = 90,
+                  Generation = 5,
+                  Strong.Against = "Yes", 
+                  Weak.Against = "No")
+# The data in the new dataframe should be factor, so I change the data into factor. 
+new$Strong.Against <- as.factor(new$Strong.Against)
+new$Weak.Against <- as.factor(new$Weak.Against)
+
+# Predict if it is Legendary by using Logistic Regression model,
+new_lg <- round(predict(lg, new, type = "response"))
+# The prediction of the model is 1, so we can determine that the new Pokemon should belongs to Legendary,
+
+# Predict if it is Legendary by decision tree,
+new_dt <- predict(dt,new)
+# The prediction of the model is Yes, so we can see that the new Pokemon should belongs to Legendary.
+
+# Predict if it is Legendary by Naive Bayes model.
+new_nb <- predict(nb,new)
+# The prediction of the model is Yes, so we can see that the new Pokemon should belongs to Legendary.
+
+# From the three models prediction, we can see that all of them determine the new Pokemon should belongs to Legendary.
+```
+
+Model Tuning & Performance Improvement
+```{r}
+# use of bagging with homogeneous learners
+# For ensemble, I need to use the bagging() function in ipred package. 
+RNGversion("3.5.2")
+set.seed(300)
+# We use the number of bag as 25.
+bag <- bagging(Legendary ~ ., data = pokemon_binary, nbagg = 25)
+# The result of the predict model
+pred_bag <- predict(bag, pokemon_binary)
+table(pred_bag, pokemon_binary$Legendary)
+
+# To see how this translates into future performance, we can use the bagged trees with 10-fold CV using the train() function in the caret package
+ctrl <- trainControl(method = "cv", number = 10)
+ctrl_mod <- train(Legendary ~ ., data = pokemon_binary, method = "treebag", trControl = ctrl)
+bag_accuracy <- ctrl_mod$results %>%
+  select(Accuracy)
+bag_accuracy
+# The kappa statistic of 0.80, and the accuracy is 96.88%, these results mean the bagged tree model is better than the decision tree model we made before. 
+```
+
+
+```{r}
+# construction of ensemble model as a function
+ensemble.mod <- function(x, train, validation, new){
+  set.seed(100)
+  # Import the formula of the NaiveBayes into the function.
+  nb.mod <- naiveBayes(train, train$x)
+  nb.mod.pred <- predict(nb.mod, validation)
+  nb.mod.pred.new <- predict(nb.mod, new)
+  nb.mod.pred.matrix <- confusionMatrix(nb.mod.pred, validation$x)
+  nb.mod.accuracy <- nb.mod.pred.matrix$overall[1]
+
+   # Import the formula of the logistic regression model into the function. 
+  lg.mod <- glm(train$x, train, family = "binomial")
+  lg.mod.pred <- round(predict(lg.mod, validation, type="response"))
+  # Because the target value should be numeric in the lg model, so we need to build a new dataset and change the type of target value into numeric.
+  validation2 <- validation
+  levels(validation2$x) <- c(0,1)
+validation2$x <- as.numeric(levels(validation2$x))[validation2$x]
+
+  lg.mod.pred.new <- round(predict(lg.mod, new, type="response"))
+  lg.mod.pred.matrix <- confusionMatrix(table(lg.mod.pred, validation2$x))
+  lg.mod.accuracy <- lg.mod.pred.matrix$overall[1]
+ 
+  # Import the formula of the decision tree model into the function. 
+  # We build a new dataset that move the target Column in the train and validation dataset.
+  train3 <- train
+  train3$x <- NULL
+  validation3 <- validation
+  validation3$x <- NULL
+  
+  dt.mod <- C5.0(train3, train$x)
+  dt.mod.pred <- predict(dt.mod,validation3)
+  dt.mod.pred.new <- predict(dt.mod, new)
+  dt.mod.pred.matrix <- confusionMatrix(table(dt.mod.pred, validation$x))
+  dt.mod.accuracy <- dt.mod.pred.matrix$overall[1]
+  
+   # Compare the accuracy of the two moedls and find out the best one.
+  accuracy <- rbind(nb.mod.accuracy,lg.mod.accuracy,dt.mod.accuracy)
+  #best <- max(accuracy$Accuracy) 
+   # return the prediction from the best model
+  return(accuracy)
+}
+
+# to applicate the ensemble mode to do the prediction, we can compare and choose the model with the highest accuracy and then return its prediction of the new data. 
+# ensemble.mod(Legendary, train_bi, val_bi,new)
+```
+
+
+```{r}
+# to compare the ensemble to individual models, I will make a datset of accuracy for all models.
+accuracy_all <- rbind(lg_accuracy,dt_accuracy,nb_accuracy,bag_accuracy)
+accuracy_all$model <- c("Logistic Regression","Decision Tree","Naive Bayes","Bagging")
+accuracy_all
+# From this accuracy table, we can see that the Naive Bayes has the highest accuracy. 
+```
+
